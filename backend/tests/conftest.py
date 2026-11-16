@@ -36,7 +36,10 @@ def launch(tmp_path):
         log_path = tmp_path / f"service-{len(processes)}.log"
         log = log_path.open("w+")
         process = subprocess.Popen(
-            command, cwd=ROOT, env={**os.environ, "LLM_MODE": "mock", **(env or {})},
+            command, cwd=ROOT, env={**os.environ, "LLM_MODE": "mock",
+                                   'MEMORY_EMBEDDING_ADAPTER': 'fake',
+                                   'SQLITE_PATH': str(tmp_path / 'aurum.sqlite3'),
+                                   'CHROMA_PATH': str(tmp_path / 'chroma'), **(env or {})},
             stdout=log, stderr=subprocess.STDOUT,
         )
         processes.append((process, log))

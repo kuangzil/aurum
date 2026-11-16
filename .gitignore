@@ -47,3 +47,20 @@ __pycache__/
 .pytest_cache/
 !.env.example
 !backend/.env.example
+
+# Durable runtime data and locally downloaded embedding weights
+backend/data/
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3-wal
+*.sqlite3-shm
+*.db
+*.db-wal
+*.db-shm
+.chroma/
+chroma/
+models/
+*.safetensors
+*.pt

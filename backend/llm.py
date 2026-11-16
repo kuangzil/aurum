@@ -56,6 +56,13 @@ class MockLLM:
         if schema is ResearchPlan:
             query = payload["query"]
             lower = query.lower()
+            # Deterministic follow-up resolution. Only earlier user statements can
+            # fill unspecified fixture topics; assistant text is not evidence.
+            prior = payload.get('prior_conversation_unverified', '') + '\n' + payload.get('recent_conversation_unverified', '')
+            prior_users = ' '.join(line.split('] ', 1)[-1] for line in prior.splitlines()
+                                   if re.match(r'^\[[^\]]+ user [^\]]+\]', line)).lower()
+            if not any(name in lower for name in ['gold', 'bitcoin', 'silver', 'oil']):
+                lower += ' ' + prior_users
             asset = next((name for name in ["gold", "bitcoin", "silver", "oil"] if name in lower), "the requested asset")
             if "volatil" in lower:
                 hypothesis = f"For {asset}, lagged 20-day realized volatility predicts next-day absolute returns better than a constant-volatility baseline out of sample."

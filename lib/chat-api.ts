@@ -25,13 +25,15 @@ export async function sendChatMessage(
   history: ChatMessage[] = [],
   onProgress?: (event: AgentTraceEvent) => void,
 ): Promise<ChatResponse> {
+  // Keep the legacy call signature, but browser-local history is never uploaded.
+  void history;
   const response = await fetch("/api/chat", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Accept: onProgress ? "application/x-ndjson" : "application/json",
     },
-    body: JSON.stringify({ ...request, history }),
+    body: JSON.stringify({ session_id: request.session_id, message: request.message }),
   });
 
   if (!response.ok) {

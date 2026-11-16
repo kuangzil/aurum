@@ -57,7 +57,7 @@ def test_a2a_server_rejects_invalid_research(services):
 def test_progress_stream(services):
     response = httpx.post(services["research_url"] + "/chat", json=BODY, headers={"Accept": "application/x-ndjson"}, timeout=10)
     events = [json.loads(line) for line in response.text.splitlines()]
-    assert events[0]["event"]["stage"] == "planning"
+    assert events[0]["event"]["stage"] == "context_cache_miss"
     assert any(event.get("event", {}).get("agent") == "validation" for event in events)
     assert events[-1]["type"] == "result"
     assert_research(events[-1]["result"])
