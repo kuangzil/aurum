@@ -2,7 +2,7 @@ import logging
 
 import pytest
 
-from backend.tests.test_memory import memory, Validator
+from backend.tests.test_memory import memory
 from backend.research_agent.service import ChatRequest, run_research
 
 EVIDENCE = ('Gold strategies:\n1. Momentum. Risk: whipsaws in sideways markets.\n'
@@ -38,14 +38,13 @@ async def test_indexing_only_revision_change_is_not_content_change(memory, caplo
 
 
 async def test_real_service_two_turns_saves_one_chroma_call(memory, monkeypatch):
-    monkeypatch.setattr('backend.research_agent.service.ValidationClient', lambda *args: Validator())
     memory.messages.save('s', 'user', EVIDENCE, 'evidence')
     first = await run_research(ChatRequest(session_id='s', message=EVIDENCE), memory.settings, memory=memory)
     assert first.context_source == 'rag'
     second = await run_research(ChatRequest(session_id='s', message=FOLLOWUP), memory.settings, memory=memory)
     assert second.context_source == 'working_memory'
     assert any(e.stage == 'memory_route' and 'retrieval_skipped=True' in e.detail for e in second.trace)
-    assert second.validation.verdict == 'insufficient_evidence'
+    assert second.status == 'blocked' and second.validation == []
     assert memory.statistics()['chroma_calls'] == 1
     # Same two requests with L1 disabled: existing L2 invalidates on turn writes.
     memory.messages.save('baseline', 'user', EVIDENCE, 'baseline-evidence')

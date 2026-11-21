@@ -1,19 +1,27 @@
-from backend.research_agent.schemas import ResearchPlan, ResearchResult
+"""Contributor boundary. No quantitative implementation is registered in this repository."""
+from typing import Protocol
+
+from pydantic import BaseModel
+
+from backend.research_agent.schemas import Action, DatasetManifest, ExperimentOutput, HypothesisSpec
 
 
-def mock_research(query: str, plan: ResearchPlan) -> ResearchResult:
-    """A fixed, generated price-index fixture. Not historical or backtested data."""
-    prices = [100.0, 101.0, 100.5, 102.0, 101.5, 103.0]
-    change = (prices[-1] / prices[0] - 1) * 100
-    return ResearchResult(
-        query=query, hypothesis=plan.hypothesis, methodology=plan.methodology,
-        evidence=[
-            f"SYNTHETIC fixture: six hand-authored price-index observations {prices}; no dates or market source.",
-            f"SYNTHETIC arithmetic check: first-to-last index change is {change:.1f}%; this is not strategy performance.",
-        ],
-        findings=[
-            "The fixture demonstrates data flow and arithmetic only. It cannot test the proposed hypothesis.",
-            "No historical market analysis, trading simulation, or backtest was performed.",
-        ],
-        limitations=["Synthetic data only; no empirical evidence.", "Too few observations to test the proposed signal.", "No transaction costs, execution model, regime coverage, or statistical significance have been measured."],
-    )
+class QuantEngine(Protocol):
+    engine_version: str
+    # Only implemented actions belong here. Models validate each action's overrides.
+    actions: dict[str, type[BaseModel]]
+
+    def list_datasets(self) -> list[DatasetManifest]: ...
+
+    def validate_spec(self, spec: HypothesisSpec, dataset: DatasetManifest) -> None:
+        """Reject unknown operators/columns and invalid timing, windows or universe."""
+        ...
+
+    def run_experiment(self, action: Action, spec: HypothesisSpec, dataset_version: str,
+                       overrides: dict) -> ExperimentOutput:
+        """Return computed evidence; never mutate the frozen spec. No retries."""
+        ...
+
+
+# The quantitative contributor supplies the implementation here, or injects it in create_app.
+engine: QuantEngine | None = None

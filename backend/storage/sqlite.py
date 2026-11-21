@@ -59,6 +59,8 @@ class Database:
                 CREATE INDEX IF NOT EXISTS gold_hour ON gold_price_snapshots(observed_hour_utc);
             """)
 
+            conn.executescript(Path(__file__).with_name("research.sql").read_text())
+
     @contextmanager
     def connect(self):
         conn = sqlite3.connect(self.path, timeout=10)

@@ -224,7 +224,7 @@ export function ChatInterface({
                         <div className="markdown"><ReactMarkdown>{message.content}</ReactMarkdown></div>
                         {message.trace && (
                           <details className="mt-4 border-t border-white/[0.08] pt-3 text-xs text-white/45">
-                            <summary className="cursor-pointer text-[#d7ba70]">A2A trace · {message.status === "validation_unavailable" ? "validation unavailable" : "completed"}</summary>
+                            <summary className="cursor-pointer text-[#d7ba70]">A2A trace · {message.status}</summary>
                             <ol className="mt-2 space-y-2">
                               {message.trace.map((event, index) => (
                                 <li key={index} className="break-words">

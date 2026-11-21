@@ -19,11 +19,10 @@ export async function POST(request: Request) {
   }
   const streaming = request.headers.get("accept")?.includes("application/x-ndjson");
   try {
-    const baseUrl = (process.env.RESEARCH_API_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
-    const response = await fetch(`${baseUrl}/chat`, {
+    const response = await fetch(new URL("/chat", process.env.RESEARCH_API_URL), {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: streaming ? "application/x-ndjson" : "application/json" },
-      body: JSON.stringify({ session_id: sessionId, message }),
+      body: JSON.stringify({ ...body, session_id: sessionId, message }),
       cache: "no-store",
       signal: AbortSignal.any([request.signal, AbortSignal.timeout(110_000)]),
     });
@@ -35,7 +34,7 @@ export async function POST(request: Request) {
     }
     return new Response(response.body, {
       headers: {
-        "Content-Type": response.headers.get("content-type") || "application/json",
+        "Content-Type": streaming ? "application/x-ndjson" : "application/json",
         "Cache-Control": "no-store",
         "X-Accel-Buffering": "no",
       },

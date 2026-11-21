@@ -9,7 +9,7 @@ from google.protobuf.json_format import MessageToDict, ParseDict
 from google.protobuf.struct_pb2 import Value
 from pydantic import ValidationError
 
-from backend.research_agent.schemas import ResearchResult
+from backend.validation_agent.schemas import ValidationRequest
 from backend.trace import Reporter, TraceEvent, no_report
 from backend.validation_agent.schemas import ValidationResult
 
@@ -23,7 +23,7 @@ class ValidationClient:
         self.url = url.rstrip("/")
         self.timeout = timeout
 
-    async def validate(self, research: ResearchResult, report: Reporter = no_report) -> ValidationResult:
+    async def validate(self, request_data: ValidationRequest, report: Reporter = no_report) -> ValidationResult:
         message_id = uuid4().hex
 
         async def emit(agent, stage, detail):
@@ -42,9 +42,9 @@ class ValidationClient:
                     async with await create_client(card, client_config=config) as client:
                         request = SendMessageRequest(message=Message(
                             message_id=message_id, role=Role.ROLE_USER,
-                            parts=[Part(data=ParseDict(research.model_dump(), Value()))],
+                            parts=[Part(data=ParseDict(request_data.model_dump(), Value()))],
                         ))
-                        await emit("a2a", "sent", "SendMessage: structured synthetic ResearchResult")
+                        await emit("a2a", "sent", "SendMessage: archived result and hypothesis references")
                         await emit("validation", "waiting", "Awaiting independent hypothesis and evidence review")
                         result = None
                         async for chunk in client.send_message(request):
@@ -56,7 +56,7 @@ class ValidationClient:
                             result = ValidationResult.model_validate(MessageToDict(parts[0].data))
                         if result is None:
                             raise ValueError("Validator returned no structured result")
-                        await emit("a2a", "received", f"ValidationResult received: {result.verdict}")
+                        await emit("a2a", "received", f"ValidationResult received: {result.suggested_verdict}")
                         return result
         except (TimeoutError, httpx.HTTPError, A2AError, ValidationError, ValueError) as exc:
             reason = "Validation Agent timed out." if isinstance(exc, (TimeoutError, httpx.TimeoutException)) else "Validation Agent unavailable or returned an invalid A2A response."

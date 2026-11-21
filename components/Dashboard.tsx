@@ -1,9 +1,8 @@
 "use client";
 
+import { useEffect, useState } from "react";
+import type { GoldHistoryResponse, GoldSnapshot } from "@/app/types";
 import {
-  Activity,
-  ArrowDownRight,
-  ArrowUpRight,
   Bot,
   Gauge,
   ShieldCheck,
@@ -19,47 +18,53 @@ import {
   YAxis,
 } from "recharts";
 
-const priceData = [
-  { date: "Oct 07", price: 2324 },
-  { date: "Oct 09", price: 2338 },
-  { date: "Oct 11", price: 2329 },
-  { date: "Oct 13", price: 2351 },
-  { date: "Oct 15", price: 2344 },
-  { date: "Oct 17", price: 2362 },
-  { date: "Oct 19", price: 2356 },
-  { date: "Oct 21", price: 2374 },
-  { date: "Oct 23", price: 2368 },
-  { date: "Oct 25", price: 2382 },
-  { date: "Oct 27", price: 2376 },
-  { date: "Oct 29", price: 2391 },
-  { date: "Oct 31", price: 2384 },
-  { date: "Nov 02", price: 2369 },
-  { date: "Nov 04", price: 2379 },
-  { date: "Nov 06", price: 2387 },
-];
-
 const activity = [
   { title: "Macro catalysts brief", detail: "Completed 6 minutes ago", icon: Sparkles, color: "text-[#dbb663]" },
   { title: "Volatility regime scan", detail: "Completed 18 minutes ago", icon: Gauge, color: "text-sky-400" },
   { title: "Support & resistance review", detail: "Completed 42 minutes ago", icon: ShieldCheck, color: "text-emerald-400" },
 ];
 
-function Metric({ label, value, change, negative }: { label: string; value: string; change: string; negative?: boolean }) {
-  return (
-    <div className="rounded-xl border border-white/[0.07] bg-[#111111] p-4">
-      <div className="text-[11px] uppercase tracking-[0.16em] text-white/35">{label}</div>
-      <div className="mt-3 flex items-end justify-between gap-2">
-        <span className="text-xl font-semibold text-white/90">{value}</span>
-        <span className={`flex items-center text-xs ${negative ? "text-rose-400" : "text-emerald-400"}`}>
-          {negative ? <ArrowDownRight size={14} /> : <ArrowUpRight size={14} />}
-          {change}
-        </span>
-      </div>
-    </div>
-  );
-}
-
 export function Dashboard({ onOpenChat }: { onOpenChat: () => void }) {
+  const [latest, setLatest] = useState<GoldSnapshot | null>();
+  const [history, setHistory] = useState<GoldSnapshot[]>();
+  const [latestError, setLatestError] = useState<string>();
+  const [historyError, setHistoryError] = useState<string>();
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadLatest() {
+      try {
+        const response = await fetch("/api/market/gold/latest", { cache: "no-store" });
+        if (response.status === 404) {
+          if (active) setLatest(null);
+          return;
+        }
+        if (!response.ok) throw new Error(`Latest gold price request failed (HTTP ${response.status}).`);
+        const snapshot: GoldSnapshot = await response.json();
+        if (active) setLatest(snapshot);
+      } catch (error) {
+        if (active) setLatestError(String(error));
+      }
+    }
+
+    async function loadHistory() {
+      try {
+        const response = await fetch("/api/market/gold/history", { cache: "no-store" });
+        if (!response.ok) throw new Error(`Gold history request failed (HTTP ${response.status}).`);
+        const data: GoldHistoryResponse = await response.json();
+        data.snapshots.sort((a, b) => Date.parse(a.observed_hour_utc) - Date.parse(b.observed_hour_utc));
+        if (active) setHistory(data.snapshots);
+      } catch (error) {
+        if (active) setHistoryError(String(error));
+      }
+    }
+
+    void loadLatest();
+    void loadHistory();
+    return () => { active = false; };
+  }, []);
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
@@ -68,78 +73,76 @@ export function Dashboard({ onOpenChat }: { onOpenChat: () => void }) {
           <h1 className="mt-1 text-2xl font-semibold text-white">Market Intelligence</h1>
         </div>
         <div className="rounded-md border border-[#d5ad58]/15 bg-[#d5ad58]/[0.06] px-3 py-2 text-[11px] text-[#d9c184]">
-          Demo data · Not real-time market data
+          Stored observations · Not a live feed
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-        <div className="col-span-2 rounded-xl border border-[#d7b669]/20 bg-gradient-to-br from-[#181713] to-[#101010] p-5 sm:col-span-1">
-          <div className="flex items-center justify-between text-xs text-white/40">
-            <span>XAU/USD</span>
-            <span className="rounded bg-emerald-400/10 px-2 py-1 text-emerald-400">+0.42%</span>
+      {latestError ? (
+        <div role="alert" className="rounded-xl border border-rose-400/20 bg-[#111111] p-5 text-sm text-rose-400">{latestError}</div>
+      ) : latest === undefined ? (
+        <div role="status" className="rounded-xl border border-white/[0.07] bg-[#111111] p-5 text-sm text-white/50">Loading latest gold observation…</div>
+      ) : latest === null ? (
+        <div role="status" className="rounded-xl border border-white/[0.07] bg-[#111111] p-5 text-sm text-white/50">No stored gold observation is available.</div>
+      ) : (
+        <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+          <div className="col-span-2 rounded-xl border border-[#d7b669]/20 bg-gradient-to-br from-[#181713] to-[#101010] p-5 sm:col-span-1">
+            <div className="text-xs text-white/40">XAU/USD</div>
+            <div className="mt-3 font-mono text-3xl font-semibold text-[#f1d490]">${Number(latest.price).toLocaleString("en-US", { maximumFractionDigits: 12 })}</div>
+            <div className="mt-2 text-xs text-white/35">Latest stored price · USD per troy ounce</div>
           </div>
-          <div className="mt-3 font-mono text-3xl font-semibold text-[#f1d490]">$2,387.42</div>
-          <div className="mt-2 text-xs text-white/35">Synthetic spot reference</div>
+          <div className="rounded-xl border border-white/[0.07] bg-[#111111] p-4">
+            <div className="text-[11px] uppercase tracking-[0.16em] text-white/35">Source</div>
+            <div className="mt-3 break-words text-sm text-white/90">{latest.source}</div>
+          </div>
+          <div className="rounded-xl border border-white/[0.07] bg-[#111111] p-4">
+            <div className="text-[11px] uppercase tracking-[0.16em] text-white/35">Quote timestamp (UTC)</div>
+            <time dateTime={latest.quoted_at_utc} className="mt-3 block text-sm text-white/90">{new Date(latest.quoted_at_utc).toLocaleString("en-US", { timeZone: "UTC" })}</time>
+          </div>
+          <div className="rounded-xl border border-white/[0.07] bg-[#111111] p-4">
+            <div className="text-[11px] uppercase tracking-[0.16em] text-white/35">Stale status</div>
+            <div className={`mt-3 text-sm ${latest.is_stale ? "text-amber-400" : "text-emerald-400"}`}>{latest.is_stale ? "Stale · Last known observation" : "Not stale · Within freshness window"}</div>
+          </div>
         </div>
-        <Metric label="30D High" value="$2,391.80" change="0.18%" />
-        <Metric label="30D Low" value="$2,324.10" change="2.70%" />
-        <Metric label="Dollar Index" value="104.21" change="0.31%" negative />
-      </div>
+      )}
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.7fr)_minmax(260px,.7fr)]">
+      <div>
         <section className="rounded-xl border border-white/[0.07] bg-[#111111] p-4 sm:p-5">
           <div className="mb-5 flex items-center justify-between">
             <div>
               <h2 className="text-sm font-medium text-white/90">Gold Price History</h2>
-              <p className="mt-1 text-xs text-white/35">XAU/USD · 30 day synthetic series</p>
+              <p className="mt-1 text-xs text-white/35">XAU/USD · Up to 24 stored hourly observations · UTC</p>
             </div>
-            <button className="rounded-md border border-white/[0.08] px-3 py-1.5 text-xs text-white/50">30D</button>
+            <span className="rounded-md border border-white/[0.08] px-3 py-1.5 text-xs text-white/50">Latest 24</span>
           </div>
           <div className="h-[270px] w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={priceData} margin={{ top: 5, right: 5, left: -20, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="goldFill" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#d7b669" stopOpacity={0.28} />
-                    <stop offset="100%" stopColor="#d7b669" stopOpacity={0.01} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid stroke="rgba(255,255,255,.055)" vertical={false} />
-                <XAxis dataKey="date" tick={{ fill: "rgba(255,255,255,.32)", fontSize: 10 }} tickLine={false} axisLine={false} interval={2} />
-                <YAxis domain={[2300, 2400]} tick={{ fill: "rgba(255,255,255,.32)", fontSize: 10 }} tickLine={false} axisLine={false} tickFormatter={(value) => `$${value}`} />
-                <Tooltip
-                  contentStyle={{ background: "#171717", border: "1px solid rgba(255,255,255,.08)", borderRadius: 8, fontSize: 12 }}
-                  labelStyle={{ color: "rgba(255,255,255,.45)" }}
-                  formatter={(value) => [`$${Number(value).toLocaleString()}`, "XAU/USD"]}
-                />
-                <Area type="monotone" dataKey="price" stroke="#d8b668" strokeWidth={2} fill="url(#goldFill)" />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
-        </section>
-
-        <section className="rounded-xl border border-white/[0.07] bg-[#111111] p-5">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-medium text-white/90">Market Metrics</h2>
-            <Activity size={15} className="text-[#d4b66c]" />
-          </div>
-          <div className="mt-5 space-y-5">
-            {[
-              ["Volatility", "14.8%", 68],
-              ["Momentum", "+62", 62],
-              ["Sentiment", "Bullish", 71],
-              ["Liquidity", "High", 82],
-            ].map(([label, value, width]) => (
-              <div key={String(label)}>
-                <div className="mb-2 flex justify-between text-xs">
-                  <span className="text-white/40">{label}</span>
-                  <span className="font-mono text-white/75">{value}</span>
-                </div>
-                <div className="h-1.5 overflow-hidden rounded-full bg-white/[0.06]">
-                  <div className="h-full rounded-full bg-gradient-to-r from-[#9d7a36] to-[#e0c47c]" style={{ width: `${width}%` }} />
-                </div>
-              </div>
-            ))}
+            {historyError ? (
+              <p role="alert" className="flex h-full items-center justify-center text-sm text-rose-400">{historyError}</p>
+            ) : history === undefined ? (
+              <p role="status" className="flex h-full items-center justify-center text-sm text-white/50">Loading gold price history…</p>
+            ) : history.length === 0 ? (
+              <p role="status" className="flex h-full items-center justify-center text-sm text-white/50">No historical gold observations are available.</p>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={history.map((snapshot) => ({ timestamp: Date.parse(snapshot.observed_hour_utc), price: Number(snapshot.price) }))} margin={{ top: 5, right: 5, left: -20, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="goldFill" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#d7b669" stopOpacity={0.28} />
+                      <stop offset="100%" stopColor="#d7b669" stopOpacity={0.01} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid stroke="rgba(255,255,255,.055)" vertical={false} />
+                  <XAxis dataKey="timestamp" type="number" scale="time" domain={["dataMin", "dataMax"]} tickFormatter={(value) => new Date(value).toLocaleString("en-US", { timeZone: "UTC", month: "short", day: "numeric", hour: "2-digit" })} tick={{ fill: "rgba(255,255,255,.32)", fontSize: 10 }} tickLine={false} axisLine={false} />
+                  <YAxis domain={["auto", "auto"]} tick={{ fill: "rgba(255,255,255,.32)", fontSize: 10 }} tickLine={false} axisLine={false} tickFormatter={(value) => `$${value}`} />
+                  <Tooltip
+                    contentStyle={{ background: "#171717", border: "1px solid rgba(255,255,255,.08)", borderRadius: 8, fontSize: 12 }}
+                    labelStyle={{ color: "rgba(255,255,255,.45)" }}
+                    labelFormatter={(value) => new Date(Number(value)).toLocaleString("en-US", { timeZone: "UTC", timeZoneName: "short" })}
+                    formatter={(value) => [`$${Number(value).toLocaleString()}`, "XAU/USD"]}
+                  />
+                  <Area type="linear" dataKey="price" dot={{ r: 3, fill: "#d8b668" }} stroke="#d8b668" strokeWidth={2} fill="url(#goldFill)" />
+                </AreaChart>
+              </ResponsiveContainer>
+            )}
           </div>
         </section>
       </div>

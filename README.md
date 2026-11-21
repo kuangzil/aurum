@@ -1,10 +1,10 @@
-# Aurum: A2A research demo
+# Aurum: evidence-based research workflow
 
 Aurum keeps its existing quantitative research dashboard, sidebar, navigation, and browser-local research sessions. The chat runs a Python Research Agent and contacts an independent Validation Agent over the official A2A protocol. New conversations are persisted in SQLite, with local Chroma semantic retrieval and an application context cache. An independent hourly job collects external XAU/USD spot observations.
 
 ## Quick start
 
-Requirements: Python **3.11+**, Node.js compatible with the installed Next.js version, and npm. Run all commands below from the repository root. The default deterministic research mode requires no API key and makes no external research or LLM calls. Semantic memory uses a real local embedding model; download its weights once before starting the Research API. The separate gold ingestion job calls the public price API.
+Requirements: Python **3.11+**, Node.js compatible with the installed Next.js version, and npm. Run all commands below from the repository root. Research planning and assessment require a configured OpenAI-compatible provider. No mock model or synthetic research tool is available in the production path. Until a quantitative engine is registered, chat records an explicit blocked run without executing experiments. Semantic memory uses a real local embedding model; download its weights once before starting the Research API. The separate gold ingestion job calls the public price API.
 
 ```bash
 npm install
@@ -28,7 +28,9 @@ Provision the embedding model once (internet required; weights stay in the Huggi
 backend/.venv/bin/python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')"
 ```
 
-After setup, embeddings run locally on CPU with `local_files_only=True`. `MEMORY_EMBEDDING_MODEL` can also name a provisioned local model directory. If weights or Chroma are unavailable, SQLite messages remain durable, semantic retrieval reports a miss, and bounded recent history still works. Errors are logged and failed indexing can be retried; there is no silent fake embedding fallback. `MEMORY_EMBEDDING_ADAPTER=fake` is an explicit test-only token-hashing adapter, independent of `LLM_MODE=mock`.
+After setup, embeddings run locally on CPU with `local_files_only=True`. `MEMORY_EMBEDDING_MODEL` can also name a provisioned local model directory. If weights or Chroma are unavailable, SQLite messages remain durable, semantic retrieval reports a miss, and bounded recent history still works. Errors are logged and failed indexing can be retried; there is no silent fake embedding fallback. `MEMORY_EMBEDDING_ADAPTER=fake` is an explicit test-only token-hashing adapter, independent of the configured LLM provider.
+
+Before starting Validation, configure `OPENAI_API_KEY` and `OPENAI_MODEL` in `backend/.env`. A quantitative engine and explicit `RESEARCH_*` settings are also required for experimental execution; without an engine, Research returns a persisted blocked run.
 
 Start these three processes in separate terminals, from the repository root:
 
@@ -59,20 +61,38 @@ See the [architecture diagram](./docs/architecture.md) for the frontend, API, ag
 
 There are two Python services. The Research Agent is hosted by the frontend-facing FastAPI process; a third Python API gateway is unnecessary for this MVP. Only the validator exposes an A2A server. The Research Agent is its A2A client and is separately addressable through `/chat`.
 
-The implementation pins **a2a-sdk 1.3.0** and uses its native **A2A 1.0 JSON-RPC** APIs: Agent Card discovery, `ClientConfig`, `create_client`, `SendMessageRequest`, `DefaultRequestHandler`, `AgentExecutor`, and SDK route factories. Request and response payloads use standard structured `Part.data` fields. A single response Message is used; there are no long-running A2A tasks, polling loops, retries, or autonomous revision cycles. The validator is called once per research run.
+The implementation pins **a2a-sdk 1.3.0** and uses its native **A2A 1.0 JSON-RPC** APIs: Agent Card discovery, `ClientConfig`, `create_client`, `SendMessageRequest`, `DefaultRequestHandler`, `AgentExecutor`, and SDK route factories. Request and response payloads use standard structured `Part.data` fields. A single response Message is used per review; there are no long-running A2A tasks, polling loops or automatic retries. The validator independently reviews each hypothesis, with at most one supplementary result and review per hypothesis.
 
 Application schemas are Pydantic models; the A2A 1.0 wire models are SDK Protobuf messages. `backend/a2a_transport/` deliberately avoids shadowing the SDK's `a2a` package. The two agents share schema definitions, but no graph state or direct agent invocation. The validator process imports and runs its own compiled graph.
 
 Main files:
 
-- `backend/research_agent/`: research graph, synthetic tool, schemas, service orchestration.
+- `backend/research_agent/`: research graph, quantitative integration contract, evidence checks, reports and schemas.
 - `backend/validation_agent/`: independent review graph, schema, A2A server.
 - `backend/a2a_transport/client.py`: official discovery/client, bounded timeout, structured response validation.
 - `backend/api/main.py`: JSON API and optional live NDJSON progress stream.
-- `backend/llm.py`: injectable deterministic fixtures and OpenAI-compatible JSON adapter.
+- `backend/llm.py`: OpenAI-compatible structured JSON adapter; test doubles live only in backend/tests/.
 - `backend/storage/`: SQLite message repository, local embedding adapters, persistent Chroma, semantic cache, retrieval and reconciliation.
 - `backend/market_data/`: validated HTTP provider, immutable hourly observations, ingestion service and CLI.
+- `backend/mcp/`: standalone web scraping MCP server and client; [usage and limits](./backend/mcp/README.md). Not yet connected to the research graph.
+- `backend/mcp/tools/`: one package per MCP tool, containing its client, server, schemas and helper scripts.
+- `backend/skills/`: one Skill folder per capability; [web-scraping](./backend/skills/web-scraping/SKILL.md) maps to `scrape_webpage` and is advertised in its MCP metadata.
 - `app/api/chat/route.ts`, `lib/chat-api.ts`, `components/ChatInterface.tsx`, `app/types.ts`: minimal frontend integration.
+
+## Web scraping MCP tool
+
+The optional `scrape_webpage` tool fetches one public static webpage and returns its
+title, body text, links, source URL, and retrieval timestamp. Results are labeled
+`external_web_unverified`. No LLM or API key is needed. From the repository root:
+
+```bash
+# Starts a local MCP stdio subprocess, invokes the tool, then closes it.
+backend/.venv/bin/python -m backend.mcp.tools.web_scraping.client https://example.com
+```
+
+See [MCP instructions](./backend/mcp/README.md) for dependency installation,
+Streamable HTTP hosting, Python usage, and tests. The existing chat workflow does
+not automatically invoke this tool.
 
 ## Configuration
 
@@ -80,7 +100,7 @@ Python loads `backend/.env`; environment variables take precedence. Next.js read
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `LLM_MODE` | `mock` | `mock` uses deterministic LLM fixtures; `openai` calls your compatible provider from both services. |
+| `LLM_MODE` | `openai` | Only the configured provider is supported in production. |
 | `OPENAI_API_KEY` | empty | Required for `openai` mode; server-side only. |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Provider base URL, including `/v1` where applicable. |
 | `OPENAI_MODEL` | empty | Your provider's model ID; required for `openai` mode. |
@@ -88,8 +108,11 @@ Python loads `backend/.env`; environment variables take precedence. Next.js read
 | `VALIDATION_AGENT_URL` | `http://127.0.0.1:8001` | Discovery URL and the validator's advertised origin. Match its actual port. |
 | `A2A_TIMEOUT_SECONDS` | `45` | Combined discovery/messaging deadline, up to 70 seconds. |
 | `RESEARCH_TIMEOUT_SECONDS` | `90` | Whole research workflow deadline, up to 100 seconds. |
+| `RESEARCH_DATASET_ID` | required for an engine | Dataset identifier from the engine manifest registry. |
+| `RESEARCH_DIAGNOSTIC_BUDGET` | required for an engine | Maximum diagnostic executions per hypothesis, 0–10. |
+| `RESEARCH_SIGNIFICANCE_LEVEL` | required for an engine | Registered primary-family significance level, strictly between 0 and 1. |
 | `RESEARCH_API_URL` | `http://127.0.0.1:8000` | Next.js server-only proxy target. |
-| `SQLITE_PATH` | `backend/data/aurum.sqlite3` | Authoritative sessions, messages and market observations. |
+| `SQLITE_PATH` | `backend/data/aurum.sqlite3` | Authoritative conversations, market observations, research evidence and reviews. |
 | `CHROMA_PATH` | `backend/data/chroma` | Rebuildable persistent conversation vectors. |
 | `MEMORY_EMBEDDING_ADAPTER` | `sentence_transformers` | Real local embeddings; `fake` is explicitly for offline tests. |
 | `MEMORY_EMBEDDING_MODEL` | `sentence-transformers/all-MiniLM-L6-v2` | Provisioned model name or local path. |
@@ -108,23 +131,21 @@ To use an LLM, set `LLM_MODE=openai`, `OPENAI_API_KEY`, and `OPENAI_MODEL` in `b
 
 ## Evidence and scope
 
-The mock research tool uses six hand-authored price-index points. Its 3% index change is simple synthetic arithmetic, **not a strategy return**. The tool never fetches current market prices or performs a backtest. LLM mode changes the research planning and independent assessment, not the synthetic data provenance.
+The production research path contains no synthetic experiments. The quantitative engine is currently **not implemented or registered**. `panel.parquet` and `calendar.csv` alone do not provide factor computation, audited data manifests, backtesting or statistical correction. Chat persists `blocked` with `quantitative_engine_not_registered`; it does not manufacture results. Gold spot observations and conversation memory remain available independently.
 
-The validation schema supports `pass`, `needs_revision`, and `insufficient_evidence`. This MVP accepts only synthetic research, so the validator enforces `insufficient_evidence` even if an LLM suggests a pass. A future genuine empirical-data integration would need an explicit provenance contract and a revised gate. Confidence measures confidence in the assessment, not a calibrated chance of investment success.
+The Agent orchestration, persistence and A2A boundary are implemented. Two distinct hypotheses are frozen before either primary experiment, both primary sequences precede family-wide correction, and optional diagnostic selections use the existing structured model interface. Python enforces action schemas and budgets. Independent validation retrieves archived evidence and cannot override mandatory provenance failures.
 
-Mock mode uses transparent fixture-based planning and heuristic review. It covers the gold momentum example, a volatility hypothesis, and a generic research fallback that explicitly flags an undefined signal. Use configured LLM mode for broader query decomposition. Neither mode establishes profitability.
-
-Browser-local sessions remain available. Only new messages received by the Python API and successful assistant replies become authoritative SQLite records; browser history is not uploaded or silently imported. Prior conversations are unverified context for research intent, never financial evidence. Spot snapshots are labeled external observations, separate from synthetic research. No backtesting, order execution, or trading is implemented. The internal write trigger is token-protected; chat and market reads remain local-demo endpoints without user authentication.
+See [the quantitative integration contract](./docs/quantitative-workflow.md) for required engine interfaces, output paths, workflow continuation and limits. Test-only engines exercise orchestration; they do not establish mathematical correctness or empirical performance.
 
 ## Persistent context
 
-The graph runs `START → context_build_up → intent → research → validate → summarize → END`.
+The research graph pre-registers two hypotheses, executes their primary family, then processes bounded diagnostics and independent reviews. See the architecture and quantitative workflow documents for the full graph.
 
 `context_build_up` retries pending indexing and embeds the query. It first checks a session-scoped application semantic cache for an exact or sufficiently similar query. A hit avoids another Chroma search. A miss searches `aurum_conversation_memory` with a mandatory session filter, applies the relevance threshold, and resolves IDs back to authoritative SQLite text. SQLite checks session ownership again. Useful matches enter the cache; no relevant match yields empty semantic context. Recent chronological history is supplied separately. Both share a strict character budget, which also bounds token usage; this is not model-specific tokenizer accounting.
 
-The application cache stores query embeddings and message references, **not LLM Transformer KV tensors or final answers**. LRU evict entries, and changes to the session's message/index revision invalidate cached context (including changes written by another process). Consequently, cache reuse is conservative and a new completed turn normally invalidates earlier entries. Cache hits still execute research and independent A2A validation. Trace stages are `context_cache_hit`, `context_cache_miss`, `context_rag_hit`, `context_rag_miss`, and `context_build_complete` within the existing JSON/NDJSON event schema.
+The application cache stores query embeddings and message references, **not LLM Transformer KV tensors or final answers**. LRU evict entries, and changes to the session's message/index revision invalidate cached context (including changes written by another process). Consequently, cache reuse is conservative and a new completed turn normally invalidates earlier entries. Cache hits only avoid conversation retrieval; they do not skip the configured research workflow. Trace stages are `context_cache_hit`, `context_cache_miss`, `context_rag_hit`, `context_rag_miss`, and `context_build_complete` within the existing JSON/NDJSON event schema.
 
-Planning receives explicitly labeled prior conversation and external observations. Mock planning resolves simple follow-ups from earlier user statements; configured LLM planning receives the same bounded context. Final replies identify referenced messages. Price/current/latest/now questions conservatively bypass conversation retrieval. Every graph run reads market data separately; market snapshots never enter the context cache. Price responses identify the source quote timestamp, fetch timestamp, age and stale status. A stale or absent record never becomes a fabricated current price.
+Planning receives explicitly labeled prior conversation and external observations. Configured LLM planning receives the bounded context. Final replies identify referenced messages. Price/current/latest/now questions conservatively bypass conversation retrieval. Every graph run reads market data separately; market snapshots never enter the context cache. Price responses identify the source quote timestamp, fetch timestamp, age and stale status. A stale or absent record never becomes a fabricated current price.
 
 SQLite uses foreign keys, WAL, a 10-second busy timeout, parameterized queries and short-lived connections. Its tables are:
 
@@ -182,15 +203,17 @@ For this local MVP, use one Research API process with persistent local disk. SQL
 
 ## API and failure behavior
 
-The existing request and primary response fields remain intact:
+The existing chat submission remains:
 
 ```json
-{"session_id":"demo-gold","message":"Research whether a momentum-based strategy could work for gold trading."}
+{"session_id":"demo-gold","message":"Research gold momentum."}
 ```
 
-The response retains `session_id`, Markdown `reply`, `status`, `mode`, `plan`, `research`, `validation`, and `trace`. Additive fields are `user_message_id`, `assistant_message_id`, `context_source`, `retrieved_message_ids`, and `market_observation`. By default it is ordinary JSON. The chat requests `Accept: application/x-ndjson`, which emits progress events followed by one final result or an error. This UI progress stream is separate from the A2A transport, which uses standard non-streaming request/response messaging.
+Responses include `round_id`, `reply`, workflow `status`, `mode`, `plan`, registered hypothesis records in `research`, persisted reviews in `validation`, and `trace`. Conversation and spot-observation fields remain available. Status is `queued`, `running`, `blocked`, `waiting_review` or `completed`; completed does not imply a validated hypothesis. The existing NDJSON stream remains progress events followed by one result or error.
 
-If the validator is offline, times out, or returns an invalid response, research is retained with `status: "validation_unavailable"`, `validation: null`, and a failed trace event. No validation result is fabricated. Research/LLM failure produces an HTTP error for JSON callers or an error event for an already-open progress stream. Next.js bounds the entire upstream request to 110 seconds; deployment hosts must permit the configured 120-second route duration.
+An unavailable/invalid A2A peer leaves the run at `waiting_review` with `next_node=validate`. It is not a statistical rejection. Errors persist the run as `blocked` and remain visible. Resumption is explicit through `/chat` with the original `session_id`, `round_id`, a message, and `retry_failed: true` for a blocked run. Waiting review does not require `retry_failed`. There are no automatic retries. The Next.js proxy forwards these optional fields; no resume UI was added.
+
+The Python API accepts an optional `request_id` to deduplicate the same submission. Reuse with a different session or question fails. Experiment run keys deduplicate completed computation and reviews are unique per result version. Research/LLM failures produce HTTP errors or an error event on an open stream. Next.js retains its existing request timeout; long-running engines must fit it or be invoked directly through the Python service.
 
 Check discovery and research health:
 
@@ -217,14 +240,14 @@ research   context_cache_miss     No eligible cached context
 research   context_rag_miss       No relevant authoritative messages
 research   context_build_complete Context ready before planning
 research   planning      Defining objective, research tasks and a testable hypothesis
-research   researching   Inspecting a synthetic fixture; no historical backtest
-a2a        discovering   GET /.well-known/agent-card.json
-a2a        discovered    Validation Agent Card resolved; A2A 1.0 JSONRPC
-a2a        sent          SendMessage: structured synthetic ResearchResult
-validation waiting       Awaiting independent hypothesis and evidence review
-a2a        received      ValidationResult received: insufficient_evidence
-research   summarizing   Preparing final conclusion with validation limitations
-research   completed     Research conclusion ready
+research   freeze_hypotheses  Both specifications committed before primary experiments
+research   evaluate_factor    Executing a registered experiment
+research   multiple_testing   Correcting the complete registered family
+research   validate           Submitting an archived result identifier
+A2A        discovering        GET /.well-known/agent-card.json
+A2A        sent               SendMessage: archived result and hypothesis references
+A2A        received           Persisted independent review received
+research   completed          All hypothesis branches finalized
 ```
 
 All A2A events carry the same outgoing `message_id`. The research service logs these structured trace events; the validator's Uvicorn access log confirms the network request to `/a2a/jsonrpc`.

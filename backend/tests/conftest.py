@@ -36,7 +36,7 @@ def launch(tmp_path):
         log_path = tmp_path / f"service-{len(processes)}.log"
         log = log_path.open("w+")
         process = subprocess.Popen(
-            command, cwd=ROOT, env={**os.environ, "LLM_MODE": "mock",
+            command, cwd=ROOT, env={**os.environ, "LLM_MODE": "openai",
                                    'MEMORY_EMBEDDING_ADAPTER': 'fake',
                                    'SQLITE_PATH': str(tmp_path / 'aurum.sqlite3'),
                                    'CHROMA_PATH': str(tmp_path / 'chroma'), **(env or {})},
@@ -72,11 +72,11 @@ def services(launch):
     validator_url = f"http://127.0.0.1:{free_port()}"
     research_url = f"http://127.0.0.1:{free_port()}"
     validator, validator_log = launch(
-        [sys.executable, "-m", "uvicorn", "backend.validation_agent.service:create_app", "--factory", "--host", "127.0.0.1", "--port", validator_url.rsplit(":", 1)[1]],
+        [sys.executable, "-m", "uvicorn", "backend.tests.research_fixture_server:validation_app", "--factory", "--host", "127.0.0.1", "--port", validator_url.rsplit(":", 1)[1]],
         validator_url + "/.well-known/agent-card.json", {"VALIDATION_AGENT_URL": validator_url},
     )
     research, _ = launch(
-        [sys.executable, "-m", "uvicorn", "backend.api.main:create_app", "--factory", "--host", "127.0.0.1", "--port", research_url.rsplit(":", 1)[1]],
+        [sys.executable, "-m", "uvicorn", "backend.tests.research_fixture_server:research_app", "--factory", "--host", "127.0.0.1", "--port", research_url.rsplit(":", 1)[1]],
         research_url + "/health", {"VALIDATION_AGENT_URL": validator_url, "A2A_TIMEOUT_SECONDS": "2"},
     )
     return {"validation_url": validator_url, "research_url": research_url, "validator": validator, "research": research, "validator_log": validator_log}

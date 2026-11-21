@@ -8,7 +8,7 @@ from backend.a2a_transport.client import ValidationClient, ValidationUnavailable
 from backend.config import Settings
 from backend.llm import LLMError, OpenAICompatibleLLM
 from backend.research_agent.schemas import ResearchPlan
-from backend.tests.test_agents import fixture_research
+from backend.validation_agent.schemas import ValidationRequest
 
 
 def mock_http(monkeypatch, handler):
@@ -28,14 +28,14 @@ async def test_a2a_discovery_obeys_total_deadline(monkeypatch):
         events.append(event)
 
     with pytest.raises(ValidationUnavailable, match="timed out"):
-        await ValidationClient("http://validator.test", 0.02).validate(await fixture_research(), report)
+        await ValidationClient("http://validator.test", 0.02).validate(ValidationRequest(result_id="r", hypothesis_id="h", focus="timing"), report)
     assert events[-1].stage == "failed"
 
 
 async def test_invalid_agent_card_is_meaningful_failure(monkeypatch):
     mock_http(monkeypatch, lambda request: httpx.Response(200, json={"name": "Broken"}))
     with pytest.raises(ValidationUnavailable, match="invalid A2A response"):
-        await ValidationClient("http://validator.test", 1).validate(await fixture_research())
+        await ValidationClient("http://validator.test", 1).validate(ValidationRequest(result_id="r", hypothesis_id="h", focus="timing"))
 
 
 async def test_compatible_llm_uses_json_and_validates_output(monkeypatch):
@@ -47,8 +47,6 @@ async def test_compatible_llm_uses_json_and_validates_output(monkeypatch):
         assert "JSON" in body["messages"][0]["content"]
         return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps({
             "objective": "Test gold momentum", "tasks": ["Specify lagged signal"],
-            "hypothesis": "A lagged signal improves net performance relative to buy-and-hold.",
-            "methodology": "Out-of-sample test with costs.",
         })}}]})
 
     mock_http(monkeypatch, provider)

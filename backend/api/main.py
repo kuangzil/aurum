@@ -7,8 +7,9 @@ import secrets
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from backend.config import Settings
-from backend.llm import LLMError
+from backend.config import ResearchSettings, Settings
+from backend.research_agent.tools import QuantEngine
+from backend.llm import LLMError, StructuredLLM
 from backend.market_data.provider import GoldAPIProvider, MarketDataUnavailable
 from backend.market_data.repository import GoldRepository
 from backend.market_data.service import sync_gold_price
@@ -17,7 +18,9 @@ from backend.storage.memory import MemoryService, make_memory
 
 
 def create_app(settings: Settings | None = None, memory: MemoryService | None = None,
-               market: GoldRepository | None = None, provider: GoldAPIProvider | None = None):
+               market: GoldRepository | None = None, provider: GoldAPIProvider | None = None,
+               engine: QuantEngine | None = None, research_settings: ResearchSettings | None = None,
+               llm: StructuredLLM | None = None):
     settings = settings or Settings()
     memory = memory or make_memory(settings)
     market = market or GoldRepository(memory.messages.db, settings.gold_stale_after_seconds)
@@ -59,7 +62,7 @@ def create_app(settings: Settings | None = None, memory: MemoryService | None = 
     async def chat(body: ChatRequest, request: Request):
         if "application/x-ndjson" not in request.headers.get("accept", ""):
             try:
-                return await run_research(body, settings, memory=memory, market=market)
+                return await run_research(body, settings, memory=memory, market=market, engine=engine, research_settings=research_settings, llm=llm)
             except TimeoutError:
                 return JSONResponse({"error": "Research request timed out."}, status_code=504)
             except LLMError as exc:
@@ -73,7 +76,7 @@ def create_app(settings: Settings | None = None, memory: MemoryService | None = 
 
             async def produce():
                 try:
-                    result = await run_research(body, settings, report, memory=memory, market=market)
+                    result = await run_research(body, settings, report, memory=memory, market=market, engine=engine, research_settings=research_settings, llm=llm)
                     await queue.put({"type": "result", "result": result.model_dump()})
                 except TimeoutError:
                     await queue.put({"type": "error", "error": "Research request timed out."})

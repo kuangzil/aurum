@@ -1,3 +1,15 @@
+export interface GoldSnapshot {
+  price: string;
+  source: string;
+  quoted_at_utc: string;
+  observed_hour_utc: string;
+  is_stale: boolean;
+}
+
+export interface GoldHistoryResponse {
+  snapshots: GoldSnapshot[];
+}
+
 export interface AgentTraceEvent {
   timestamp: string;
   agent: "research" | "validation" | "a2a";
@@ -12,7 +24,7 @@ export interface ChatMessage {
   content: string;
   createdAt: string;
   trace?: AgentTraceEvent[];
-  status?: "completed" | "validation_unavailable";
+  status?: "queued" | "running" | "waiting_review" | "blocked" | "completed";
   mode?: "mock" | "openai";
 }
 

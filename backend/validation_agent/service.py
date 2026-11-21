@@ -16,32 +16,34 @@ from starlette.applications import Starlette
 
 from backend.config import Settings
 from backend.llm import LLMError, StructuredLLM, make_llm
-from backend.research_agent.schemas import ResearchResult
+from backend.validation_agent.schemas import ValidationRequest
+from backend.storage.research import ReviewRepository
+from backend.storage.sqlite import Database
 from backend.validation_agent.graph import build_validation_graph
 
 logger = logging.getLogger("aurum.validation")
 
 
 class ValidationExecutor(AgentExecutor):
-    def __init__(self, llm: StructuredLLM, timeout: float):
-        self.graph = build_validation_graph(llm)
+    def __init__(self, llm: StructuredLLM, timeout: float, repository: ReviewRepository):
+        self.graph = build_validation_graph(llm, repository)
         self.timeout = timeout
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         message = context.message
         if message is None or message.role != Role.ROLE_USER:
-            raise InvalidParamsError("A user Message with a structured ResearchResult is required")
+            raise InvalidParamsError("A user Message with a structured ValidationRequest is required")
         parts = [p for p in message.parts if p.HasField("data")]
         if len(parts) != 1:
-            raise InvalidParamsError("Exactly one data Part containing ResearchResult is required")
+            raise InvalidParamsError("Exactly one data Part containing ValidationRequest is required")
         try:
-            research = ResearchResult.model_validate(MessageToDict(parts[0].data))
+            request = ValidationRequest.model_validate(MessageToDict(parts[0].data))
         except ValidationError as exc:
-            raise InvalidParamsError("ResearchResult schema validation failed") from exc
+            raise InvalidParamsError("ValidationRequest schema validation failed") from exc
         logger.info("A2A received message_id=%s; independent validation started", message.message_id)
         try:
             async with asyncio.timeout(self.timeout):
-                state = await self.graph.ainvoke({"research": research})
+                state = await self.graph.ainvoke({"request": request})
         except (LLMError, TimeoutError) as exc:
             raise InternalError("Validation assessment failed or timed out") from exc
         result = state["validation"]
@@ -50,7 +52,7 @@ class ValidationExecutor(AgentExecutor):
             role=Role.ROLE_AGENT,
             parts=[Part(data=ParseDict(result.model_dump(), Value()))],
         ))
-        logger.info("A2A replied message_id=%s verdict=%s", message.message_id, result.verdict)
+        logger.info("A2A replied message_id=%s verdict=%s", message.message_id, result.suggested_verdict)
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
         raise UnsupportedOperationError("This service uses single request/response messages, not persistent tasks")
@@ -60,7 +62,7 @@ def create_app(settings: Settings | None = None, llm: StructuredLLM | None = Non
     settings = settings or Settings()
     card = AgentCard(
         name="Aurum Validation Agent", version="1.0.0",
-        description="Independent LangGraph review of synthetic research, hypothesis clarity and missing evidence.",
+        description="Independent evidence retrieval, provenance verification and methodological review.",
         supported_interfaces=[AgentInterface(
             url=f"{settings.validation_agent_url.rstrip('/')}/a2a/jsonrpc",
             protocol_binding="JSONRPC", protocol_version="1.0",
@@ -69,12 +71,13 @@ def create_app(settings: Settings | None = None, llm: StructuredLLM | None = Non
         default_input_modes=["application/json"], default_output_modes=["application/json"],
         skills=[AgentSkill(
             id="validate-research", name="Validate research evidence",
-            description="Returns a structured assessment; synthetic research cannot establish profitability.",
-            tags=["research", "validation", "synthetic"],
+            description="Reviews archived research evidence and returns a durable review identifier.",
+            tags=["research", "validation", "evidence"],
         )],
     )
     handler = DefaultRequestHandler(
-        agent_executor=ValidationExecutor(llm or make_llm(settings), settings.llm_timeout_seconds + 2),
+        agent_executor=ValidationExecutor(llm or make_llm(settings), settings.llm_timeout_seconds + 2,
+            ReviewRepository(Database(settings.sqlite_path))),
         task_store=InMemoryTaskStore(), agent_card=card,
     )
     return Starlette(routes=[

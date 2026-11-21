@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=Path(__file__).with_name(".env"), extra="ignore"
     )
-    llm_mode: Literal["mock", "openai"] = "mock"
+    llm_mode: Literal["mock", "openai"] = "openai"
     openai_api_key: SecretStr = SecretStr("")
     openai_base_url: str = "https://api.openai.com/v1"
     openai_model: str = ""
@@ -35,10 +35,12 @@ class Settings(BaseSettings):
     gold_http_attempts: int = Field(default=3, ge=1, le=3)
     internal_job_token: SecretStr = SecretStr("")
 
-    @model_validator(mode="after")
-    def require_llm_configuration(self):
-        if self.llm_mode == "openai" and (
-            not self.openai_api_key.get_secret_value() or not self.openai_model
-        ):
-            raise ValueError("OPENAI_API_KEY and OPENAI_MODEL are required in openai mode")
-        return self
+
+
+class ResearchSettings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=Path(__file__).with_name(".env"), env_prefix="RESEARCH_", extra="ignore"
+    )
+    dataset_id: str = Field(min_length=1)
+    diagnostic_budget: int = Field(ge=0, le=10)
+    significance_level: float = Field(gt=0, lt=1, allow_inf_nan=False)

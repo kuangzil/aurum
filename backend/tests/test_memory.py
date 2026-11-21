@@ -7,13 +7,11 @@ from datetime import datetime, timezone
 import pytest
 
 from backend.config import Settings
-from backend.llm import MockLLM
 from backend.research_agent.graph import build_research_graph
 from backend.storage.cache import SemanticCache
 from backend.storage.embeddings import FakeEmbeddings
 from backend.storage.memory import MemoryService
 from backend.storage.sqlite import Database, MessageRepository
-from backend.validation_agent.schemas import ValidationResult
 
 
 @pytest.fixture
@@ -202,32 +200,21 @@ def test_cache_lru_and_revision():
     assert cache.get('a', 'one', [1., 0.], (1,)) is not None
 
 
-class Validator:
-    calls = 0
-
-    async def validate(self, research, report):
-        self.calls += 1
-        assert research.evidence_kind == 'synthetic'
-        return ValidationResult(verdict='insufficient_evidence', issues=['Synthetic evidence only'],
-                                recommendations=['Acquire historical data'], confidence=.95)
-
-
-async def test_context_changes_planning_and_validation_still_runs(memory):
+async def test_context_changes_planning_and_validation_still_runs(memory, monkeypatch):
+    from backend.research_agent.service import ChatRequest, run_research
+    from backend.tests.research_fixtures import TestLLM, TestEngine, TestValidator, research_settings
     memory.settings.memory_recent_messages = 4
     memory.messages.save('s', 'user', 'Research gold momentum', 'prior')
-    validator = Validator()
-    events = []
-
-    async def report(event):
-        events.append(event.stage)
-
-    result = await build_research_graph(MockLLM(), validator, report, memory).ainvoke(
-        {'session_id': 's', 'query': 'Continue that study'})
-    assert 'gold' in result['plan'].hypothesis and '20-day return' in result['plan'].hypothesis
-    assert 'Prior conversation context' in result['reply']
-    assert 'prior' in result['reply']
-    assert events.index('context_build_complete') < events.index('planning')
-    assert validator.calls == 1
+    validator = TestValidator(memory.messages.db)
+    monkeypatch.setattr('backend.research_agent.service.ValidationClient', lambda *args: validator)
+    llm = TestLLM()
+    response = await run_research(ChatRequest(session_id='s', message='Continue that study'), memory.settings,
+        llm=llm, engine=TestEngine(), research_settings=research_settings(), memory=memory)
+    assert 'gold momentum' in llm.calls[0][1]['recent_conversation_unverified']
+    assert 'prior' in response.reply
+    stages = [event.stage for event in response.trace]
+    assert stages.index('context_build_complete') < stages.index('planning')
+    assert len(validator.calls) == 2
 
 
 async def test_context_budget_and_price_bypass(memory):
@@ -256,7 +243,6 @@ async def test_embedding_outage_preserves_recent_history(memory, monkeypatch):
 async def test_chat_persists_success_and_failed_user_request(memory, monkeypatch):
     from backend.llm import LLMError
     from backend.research_agent.service import ChatRequest, run_research
-    monkeypatch.setattr('backend.research_agent.service.ValidationClient', lambda *args: Validator())
     request = ChatRequest(session_id='persist', message='gold momentum')
     response = await run_research(request, memory.settings, memory=memory)
     rows = memory.messages.history('persist')
@@ -264,12 +250,14 @@ async def test_chat_persists_success_and_failed_user_request(memory, monkeypatch
     assert rows[0]['message_id'] == response.user_message_id
     assert rows[1]['message_id'] == response.assistant_message_id
     assert rows[1]['content'] == response.reply
-    assert json.loads(rows[1]['metadata_json'])['research']['evidence_kind'] == 'synthetic'
+    assert json.loads(rows[1]['metadata_json'])['status'] == 'blocked'
 
     class FailedLLM:
         async def generate(self, *args):
             raise LLMError('offline')
 
     with pytest.raises(LLMError):
-        await run_research(request, memory.settings, llm=FailedLLM(), memory=memory)
+        from backend.tests.research_fixtures import TestEngine, research_settings
+        await run_research(request, memory.settings, llm=FailedLLM(), memory=memory,
+                           engine=TestEngine(), research_settings=research_settings())
     assert [row['role'] for row in memory.messages.history('persist')] == ['user', 'assistant', 'user']

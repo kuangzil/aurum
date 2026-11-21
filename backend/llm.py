@@ -1,14 +1,11 @@
 """Small injectable JSON LLM boundary; never substitutes fixtures on API failure."""
 import json
-import re
 from typing import Protocol, TypeVar
 
 import httpx
 from pydantic import BaseModel, ValidationError
 
 from backend.config import Settings
-from backend.research_agent.schemas import ResearchPlan
-from backend.validation_agent.schemas import ValidationResult
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -49,49 +46,9 @@ class OpenAICompatibleLLM:
             raise LLMError("LLM request failed or returned invalid structured output.") from exc
 
 
-class MockLLM:
-    """Deterministic fixtures for the offline demo and tests; no market knowledge."""
-
-    async def generate(self, schema: type[T], instructions: str, payload: dict) -> T:
-        if schema is ResearchPlan:
-            query = payload["query"]
-            lower = query.lower()
-            # Deterministic follow-up resolution. Only earlier user statements can
-            # fill unspecified fixture topics; assistant text is not evidence.
-            prior = payload.get('prior_conversation_unverified', '') + '\n' + payload.get('recent_conversation_unverified', '')
-            prior_users = ' '.join(line.split('] ', 1)[-1] for line in prior.splitlines()
-                                   if re.match(r'^\[[^\]]+ user [^\]]+\]', line)).lower()
-            if not any(name in lower for name in ['gold', 'bitcoin', 'silver', 'oil']):
-                lower += ' ' + prior_users
-            asset = next((name for name in ["gold", "bitcoin", "silver", "oil"] if name in lower), "the requested asset")
-            if "volatil" in lower:
-                hypothesis = f"For {asset}, lagged 20-day realized volatility predicts next-day absolute returns better than a constant-volatility baseline out of sample."
-            elif "momentum" in lower or "trend" in lower:
-                hypothesis = f"For {asset}, a long/cash rule using the prior 20-day return has higher out-of-sample risk-adjusted returns than buy-and-hold after costs."
-            else:
-                hypothesis = f"For {asset}, a pre-registered signal derived from the requested research question improves out-of-sample risk-adjusted returns over buy-and-hold after costs; the exact signal still needs definition."
-            return schema.model_validate({
-                "objective": f"Assess the testability of: {query}",
-                "tasks": ["Define a signal, baseline, and evaluation horizon", "Inspect synthetic fixture provenance", "Specify historical tests and missing evidence"],
-                "hypothesis": hypothesis,
-                "methodology": "Proposed test only: use lagged daily signals, chronological train/test splits and walk-forward evaluation; compare with a baseline after fees, spread and slippage. Report uncertainty, drawdown, turnover and parameter sensitivity. No backtest is run here.",
-            })
-        if schema is ValidationResult:
-            research = payload["research"]
-            issues = ["Only synthetic evidence is supplied; empirical support and profitability remain unverified."]
-            if len(research["hypothesis"].split()) < 8 or "needs definition" in research["hypothesis"]:
-                issues.append("The hypothesis needs a precise signal, comparison, and measurable outcome.")
-            if not research["evidence"]:
-                issues.append("No evidence was supplied.")
-            if any(re.search(r"\b(proven|guaranteed|profitable)\b", claim, re.I) for claim in research["findings"]):
-                issues.append("Claims of proven or guaranteed profitability are unsupported by the supplied evidence.")
-            return schema.model_validate({
-                "verdict": "insufficient_evidence", "issues": issues,
-                "recommendations": ["Pre-register signal rules, horizon, universe and benchmark.", "Acquire timestamped historical data and check look-ahead bias.", "Run out-of-sample and walk-forward tests including costs, uncertainty and parameter robustness."],
-                "confidence": 0.95,
-            })
-        raise ValueError(f"No fixture for {schema.__name__}")
-
-
 def make_llm(settings: Settings) -> StructuredLLM:
-    return MockLLM() if settings.llm_mode == "mock" else OpenAICompatibleLLM(settings)
+    if settings.llm_mode != "openai":
+        raise LLMError("Production research requires LLM_MODE=openai; mock execution is disabled.")
+    if not settings.openai_api_key.get_secret_value() or not settings.openai_model:
+        raise LLMError("OPENAI_API_KEY and OPENAI_MODEL are required.")
+    return OpenAICompatibleLLM(settings)

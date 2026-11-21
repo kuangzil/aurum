@@ -8,7 +8,7 @@ export interface ChatRequest {
 export interface ChatResponse {
   session_id: string;
   reply: string;
-  status: "completed" | "validation_unavailable";
+  status: "queued" | "running" | "waiting_review" | "blocked" | "completed";
   mode: "mock" | "openai";
   trace: AgentTraceEvent[];
 }

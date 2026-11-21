@@ -7,14 +7,13 @@ import pytest
 
 from backend.api.main import create_app
 from backend.config import Settings
-from backend.llm import MockLLM
 from backend.market_data.provider import ENDPOINT, GoldAPIProvider, GoldQuote, MarketDataUnavailable
 from backend.market_data.repository import GoldRepository, describe_observation
 from backend.market_data.service import sync_gold_price
 from backend.research_agent.graph import build_research_graph
 from backend.storage.memory import make_memory
 from backend.storage.sqlite import Database, utc_iso, utc_now
-from backend.tests.test_memory import Validator
+from backend.research_agent.service import ChatRequest, run_research
 
 
 def payload(**updates):
@@ -157,7 +156,6 @@ async def test_market_reads_protected_trigger_and_json_ndjson_contracts(tmp_path
         calls.append(request)
         return httpx.Response(200, json=payload())
 
-    monkeypatch.setattr('backend.research_agent.service.ValidationClient', lambda *args: Validator())
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as provider_client:
         provider = GoldAPIProvider(client=provider_client)
         app = create_app(settings, memory, market, provider)
@@ -179,8 +177,8 @@ async def test_market_reads_protected_trigger_and_json_ndjson_contracts(tmp_path
                 response = await client.post('/chat', json=body, headers={'Accept': accept})
                 assert response.status_code == 200
                 result = response.json() if accept == 'application/json' else json.loads(response.text.splitlines()[-1])['result']
-                assert result['research']['evidence_kind'] == 'synthetic'
-                assert result['validation']['verdict'] == 'insufficient_evidence'
+                assert result['research'] == [] and result['status'] == 'blocked'
+                assert result['validation'] == []
                 assert result['market_observation']['price'] == '2650.123456'
                 assert 'within the configured freshness window' in result['reply']
             settings.internal_job_token = settings.internal_job_token.__class__('')
@@ -193,19 +191,19 @@ async def test_stale_and_missing_prices_cannot_come_from_memory(tmp_path, market
                         chroma_path=tmp_path / 'chroma', memory_embedding_adapter='fake')
     memory = make_memory(settings)
     memory.messages.save('s', 'assistant', 'The current gold price is 999999 USD.', 'old-price')
-    graph = build_research_graph(MockLLM(), Validator(), memory=memory, market=market)
-    missing = await graph.ainvoke({'session_id': 's', 'query': 'What is the current gold price?'})
+    missing = (await run_research(ChatRequest(session_id='s', message='What is the current gold price?'),
+        settings, memory=memory, market=market)).model_dump()
     assert '999999' not in missing['reply']
     assert 'Current XAU/USD price unavailable' in missing['reply']
     market.save(GoldQuote.model_validate(payload(updatedAt=utc_iso(utc_now() - timedelta(days=2)))))
-    stale = await graph.ainvoke({'session_id': 's', 'query': 'What is the current gold price?'})
+    stale = (await run_research(ChatRequest(session_id='s', message='What is the current gold price?'),
+        settings, memory=memory, market=market)).model_dump()
     assert 'STALE' in stale['reply'] and 'current price is unavailable' in stale['reply']
     assert '999999' not in stale['reply']
-    assert stale['validation'].verdict == 'insufficient_evidence'
-    assert stale['research'].evidence_kind == 'synthetic'
+    assert stale['validation'] == [] and stale['status'] == 'blocked'
 
 
-async def test_freshness_rechecked_after_slow_validation(market, monkeypatch):
+async def test_freshness_rechecked_before_report(market, monkeypatch, tmp_path):
     now = utc_now()
     market.save(GoldQuote.model_validate(payload(updatedAt=utc_iso(now))), now)
     read = market.latest
@@ -216,8 +214,10 @@ async def test_freshness_rechecked_after_slow_validation(market, monkeypatch):
         return read(now if len(reads) == 1 else now + timedelta(hours=3))
 
     monkeypatch.setattr(market, 'latest', latest)
-    graph = build_research_graph(MockLLM(), Validator(), market=market)
-    result = await graph.ainvoke({'session_id': 's', 'query': 'current gold price'})
+    settings = Settings(_env_file=None, sqlite_path=tmp_path/'memory.sqlite3',
+                        chroma_path=tmp_path/'chroma', memory_embedding_adapter='fake')
+    result = (await run_research(ChatRequest(session_id='s',message='current gold price'),
+        settings, market=market)).model_dump()
     assert len(reads) == 2
     assert result['market_observation']['is_stale']
     assert 'current price is unavailable' in result['reply']
